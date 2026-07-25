@@ -1,0 +1,21 @@
+# flake-hunter run configuration.
+# User-facing config for the tool's own behavior -- separate from
+# pyproject.toml, which configures packaging/tooling for this repo.
+
+[suite]
+path = "tests/fixtures/flaky_demo_suite"
+
+[run]
+runs = 20
+parallel = 4
+output_dir = ".flake_hunter/raw_runs"
+
+[thresholds]
+# A test is flaky if its fail-rate falls strictly between these bounds.
+# 0.0 and 1.0 are not flaky -- they're consistently passing/failing.
+min_fail_rate = 0.0
+max_fail_rate = 1.0
+
+[quarantine]
+# "report" | "apply" | "both"
+mode = "report"
