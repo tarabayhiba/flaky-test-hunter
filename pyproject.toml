@@ -22,6 +22,9 @@ dev = [
     "pytest-cov>=5.0",
 ]
 
+[project.scripts]
+flake-hunter = "flake_hunter.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["flake_hunter*"]
 
