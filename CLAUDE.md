@@ -109,10 +109,9 @@ Key design points worth knowing before touching this code:
   considered and decided against: this is solo, sequential work (one
   phase at a time, not parallel streams), so a second working directory
   doesn't solve a real friction point here.
-- Delete each branch after it's merged into `main` (`git branch -d`,
-  which only succeeds if fully merged — safe by construction). The
-  commits live on in `main`'s history either way; no reason to keep the
-  branch pointer around.
+- Keep each branch around after it's merged into `main` — don't delete
+  it. (Previously this repo deleted merged branches with `git branch
+  -d`; that's no longer the convention.)
 
 ## Project shape
 
