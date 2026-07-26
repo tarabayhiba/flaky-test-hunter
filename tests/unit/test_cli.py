@@ -71,6 +71,15 @@ def test_cli_main_reports_the_planted_flaky_tests(
     for test_name in _EXPECTED_FLAKY_TESTS:
         assert test_name in ledger_contents
 
+    stable_line = next(
+        line for line in ledger_contents.splitlines() if "test_always_passes" in line
+    )
+    assert "| stable |" in stable_line
+    always_failing_line = next(
+        line for line in ledger_contents.splitlines() if "test_always_fails" in line
+    )
+    assert "| always-failing |" in always_failing_line
+
 
 def test_cli_main_returns_nonzero_on_bad_config(tmp_path: Path) -> None:
     config_path = tmp_path / "flake_hunter.toml"

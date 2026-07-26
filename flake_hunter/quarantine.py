@@ -31,6 +31,10 @@ _TABLE_DIVIDER = "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
 
 _MAX_MESSAGE_LEN = 80
 
+_STATUS_FLAKY = "flaky"
+_STATUS_STABLE = "stable"
+_STATUS_ALWAYS_FAILING = "always-failing"
+
 _XFAIL_FAIL_RATE_THRESHOLD = 0.5
 _QUARANTINE_MARKS_RELATIVE_PATH = Path(".flake_hunter") / "quarantine_marks.json"
 
@@ -208,22 +212,44 @@ def _parse_ledger(known_flakes_path: Path) -> dict[str, _LedgerRow]:
     return rows
 
 
-def write_known_flakes(reports: list[FlakeReport], known_flakes_path: Path) -> None:
-    """Merge newly detected flakes into the known_flakes.md ledger.
+def _status_for_fail_rate(fail_rate: float) -> str:
+    """Map a fail_rate to a ledger status.
 
+    Exact equality is safe here, not defensive: aggregate_stable() only
+    ever hands this 0.0 or 1.0 (unanimous outcomes), and aggregate() only
+    ever hands this a value strictly between 0.0 and 1.0 -- so those are
+    the only three cases this ever sees.
+    """
+    if fail_rate == 0.0:
+        return _STATUS_STABLE
+    if fail_rate == 1.0:
+        return _STATUS_ALWAYS_FAILING
+    return _STATUS_FLAKY
+
+
+def write_known_flakes(reports: list[FlakeReport], known_flakes_path: Path) -> None:
+    """Merge newly detected flaky/stable/always-failing findings into the ledger.
+
+    Status is derived per-report from ``fail_rate`` (0% -> "stable", 100%
+    -> "always-failing", otherwise "flaky") rather than passed in.
     Existing rows are matched by nodeid and updated in place (counts,
-    ``last_seen``, ``fail_rate``, and ``sample_failure_message`` refreshed;
-    ``first_seen``/``suspected_cause`` preserved); nodeids new to this
-    batch are appended with today's date and an "unknown" cause
-    placeholder (no failure-classifier exists yet). Rows for nodeids
-    absent from this batch -- tests no longer observed as flaky -- are
-    never dropped or otherwise touched, so history is never lost.
+    ``last_seen``, ``fail_rate``, ``status``, and
+    ``sample_failure_message`` refreshed; ``first_seen``/
+    ``suspected_cause`` preserved); nodeids new to this batch are
+    appended with today's date. A new "flaky" row defaults its cause to
+    "unknown" (no failure-classifier exists yet); a new "stable" or
+    "always-failing" row has nothing to investigate, so defaults to "-"
+    instead. Rows for nodeids absent from this batch -- tests no longer
+    observed -- are never dropped or otherwise touched, so history is
+    never lost.
     """
     rows = _parse_ledger(known_flakes_path)
     today = date.today().isoformat()
 
     for report in reports:
         existing = rows.get(report.nodeid)
+        status = _status_for_fail_rate(report.fail_rate)
+        default_cause = "unknown" if status == _STATUS_FLAKY else "-"
         rows[report.nodeid] = _LedgerRow(
             nodeid=report.nodeid,
             first_seen=existing.first_seen if existing else today,
@@ -231,8 +257,8 @@ def write_known_flakes(reports: list[FlakeReport], known_flakes_path: Path) -> N
             fail_rate=f"{report.fail_rate:.1%}",
             pass_count=report.pass_count,
             fail_count=report.fail_count + report.error_count,
-            suspected_cause=existing.suspected_cause if existing else "unknown",
-            status="flaky",
+            suspected_cause=existing.suspected_cause if existing else default_cause,
+            status=status,
             sample_failure_message=_sanitize_message(report.sample_failure_message),
         )
 

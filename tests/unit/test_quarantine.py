@@ -225,6 +225,61 @@ def test_write_known_flakes_preserves_row_with_malformed_count(tmp_path: Path) -
     assert "test_new" in contents
 
 
+def test_write_known_flakes_marks_zero_fail_rate_as_stable(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "known_flakes.md"
+
+    write_known_flakes(
+        [_report("test_a.py::test_stable", pass_count=20, fail_count=0, fail_rate=0.0)],
+        ledger_path,
+    )
+
+    contents = ledger_path.read_text()
+    row_line = next(line for line in contents.splitlines() if "test_stable" in line)
+    cells = [cell.strip() for cell in row_line.split("|")]
+    assert cells[7] == "-"
+    assert cells[8] == "stable"
+
+
+def test_write_known_flakes_marks_full_fail_rate_as_always_failing(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "known_flakes.md"
+
+    write_known_flakes(
+        [_report("test_a.py::test_broken", pass_count=0, fail_count=20, fail_rate=1.0)],
+        ledger_path,
+    )
+
+    contents = ledger_path.read_text()
+    row_line = next(line for line in contents.splitlines() if "test_broken" in line)
+    cells = [cell.strip() for cell in row_line.split("|")]
+    assert cells[7] == "-"
+    assert cells[8] == "always-failing"
+
+
+def test_write_known_flakes_preserves_suspected_cause_when_status_changes(
+    tmp_path: Path,
+) -> None:
+    ledger_path = tmp_path / "known_flakes.md"
+    ledger_path.write_text(
+        "# Known Flakes\n\n"
+        "| Test ID | First Seen | Last Seen | Fail Rate | Pass Count | Fail Count | "
+        "Suspected Cause | Status | Sample Failure |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        "| test_a.py::test_one | 2024-01-01 | 2024-01-02 | 10.0% | 9 | 1 | "
+        "network flakiness | flaky | old failure |\n"
+    )
+
+    write_known_flakes(
+        [_report("test_a.py::test_one", pass_count=20, fail_count=0, fail_rate=0.0)],
+        ledger_path,
+    )
+
+    contents = ledger_path.read_text()
+    updated_line = next(line for line in contents.splitlines() if "test_one" in line)
+    cells = [cell.strip() for cell in updated_line.split("|")]
+    assert cells[7] == "network flakiness"
+    assert cells[8] == "stable"
+
+
 def test_apply_quarantine_marks_rewrites_conftest_with_only_sentinel(tmp_path: Path) -> None:
     conftest_path = tmp_path / "conftest.py"
     conftest_path.write_text("# --- flake-hunter quarantine marks ---\n")

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from flake_hunter.aggregator import aggregate
+from flake_hunter.aggregator import aggregate, aggregate_stable
 from flake_hunter.runner import run_suite_n_times
 
 _FIXTURE_SUITE = (Path(__file__).parent.parent / "fixtures" / "flaky_demo_suite").resolve()
@@ -34,3 +34,10 @@ def test_pipeline_flags_exactly_the_planted_flaky_tests(tmp_path: Path) -> None:
         "test_flaky_shared_temp_race",
         "test_flaky_timing_deadline",
     }
+
+    stable_reports = aggregate_stable(manifest)
+    stable_by_name = {report.nodeid.split("::")[-1]: report for report in stable_reports}
+
+    assert set(stable_by_name) == {"test_always_passes", "test_always_fails"}
+    assert stable_by_name["test_always_passes"].fail_rate == 0.0
+    assert stable_by_name["test_always_fails"].fail_rate == 1.0

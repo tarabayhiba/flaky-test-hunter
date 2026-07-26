@@ -228,3 +228,93 @@ def test_aggregate_reports_sorted_by_nodeid(monkeypatch: pytest.MonkeyPatch) -> 
     reports = aggregator.aggregate(manifest, min_fail_rate=0.0, max_fail_rate=1.0)
 
     assert [r.nodeid for r in reports] == ["a_flaky", "z_flaky"]
+
+
+def test_aggregate_stable_excludes_genuinely_flaky_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _manifest(10)
+
+    def fake_parse_run(path: Path) -> dict[str, TestOutcome]:
+        i = _run_index(path)
+        return {
+            "flaky": TestOutcome(
+                nodeid="flaky",
+                outcome=Outcome.FAILED if i < 3 else Outcome.PASSED,
+                duration=0.01,
+            )
+        }
+
+    monkeypatch.setattr(aggregator, "parse_run", fake_parse_run)
+
+    reports = aggregator.aggregate_stable(manifest)
+
+    assert reports == []
+
+
+def test_aggregate_stable_includes_always_passing_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _manifest(5)
+
+    def fake_parse_run(path: Path) -> dict[str, TestOutcome]:
+        return {
+            "always_passes": TestOutcome(
+                nodeid="always_passes", outcome=Outcome.PASSED, duration=0.01
+            )
+        }
+
+    monkeypatch.setattr(aggregator, "parse_run", fake_parse_run)
+
+    reports = aggregator.aggregate_stable(manifest)
+
+    assert [r.nodeid for r in reports] == ["always_passes"]
+    assert reports[0].fail_rate == 0.0
+
+
+def test_aggregate_stable_includes_always_failing_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _manifest(5)
+
+    def fake_parse_run(path: Path) -> dict[str, TestOutcome]:
+        return {
+            "always_fails": TestOutcome(
+                nodeid="always_fails", outcome=Outcome.FAILED, duration=0.01, message="nope"
+            )
+        }
+
+    monkeypatch.setattr(aggregator, "parse_run", fake_parse_run)
+
+    reports = aggregator.aggregate_stable(manifest)
+
+    assert [r.nodeid for r in reports] == ["always_fails"]
+    assert reports[0].fail_rate == 1.0
+    assert reports[0].sample_failure_message == "nope"
+
+
+def test_aggregate_stable_excludes_test_with_any_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _manifest(5)
+
+    def fake_parse_run(path: Path) -> dict[str, TestOutcome]:
+        i = _run_index(path)
+        outcome = Outcome.SKIPPED if i == 0 else Outcome.PASSED
+        return {
+            "partly_skipped": TestOutcome(nodeid="partly_skipped", outcome=outcome, duration=0.01)
+        }
+
+    monkeypatch.setattr(aggregator, "parse_run", fake_parse_run)
+
+    reports = aggregator.aggregate_stable(manifest)
+
+    assert reports == []
+
+
+def test_aggregate_stable_reports_sorted_by_nodeid(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _manifest(3)
+
+    def fake_parse_run(path: Path) -> dict[str, TestOutcome]:
+        return {
+            "z_stable": TestOutcome(nodeid="z_stable", outcome=Outcome.PASSED, duration=0.01),
+            "a_stable": TestOutcome(nodeid="a_stable", outcome=Outcome.FAILED, duration=0.01),
+        }
+
+    monkeypatch.setattr(aggregator, "parse_run", fake_parse_run)
+
+    reports = aggregator.aggregate_stable(manifest)
+
+    assert [r.nodeid for r in reports] == ["a_stable", "z_stable"]
