@@ -23,8 +23,13 @@ from typing import Any
 from flake_hunter.models import FlakeReport
 
 _LEDGER_TITLE = "# Known Flakes"
-_TABLE_HEADER = "| Test ID | First Seen | Pass Count | Fail Count | Suspected Cause | Status |"
-_TABLE_DIVIDER = "| --- | --- | --- | --- | --- | --- |"
+_TABLE_HEADER = (
+    "| Test ID | First Seen | Last Seen | Fail Rate | Pass Count | Fail Count | "
+    "Suspected Cause | Status | Sample Failure |"
+)
+_TABLE_DIVIDER = "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+
+_MAX_MESSAGE_LEN = 80
 
 _XFAIL_FAIL_RATE_THRESHOLD = 0.5
 _QUARANTINE_MARKS_RELATIVE_PATH = Path(".flake_hunter") / "quarantine_marks.json"
@@ -75,6 +80,24 @@ def _safe_int(value: str) -> int:
         return 0
 
 
+def _sanitize_message(message: str | None) -> str:
+    """Collapse/truncate a failure message for a ledger cell.
+
+    Mirrors report.py's ``_sanitize_message`` (collapse to one line,
+    truncate). Pipe-escaping is deliberately *not* done here -- unlike
+    report.py, this value round-trips through the ledger file on every
+    merge, and escaping is applied once at serialization time (see
+    ``write_known_flakes``), the same way ``nodeid`` is handled, so a
+    value read back from disk is never re-escaped on top of itself.
+    """
+    if message is None:
+        return "-"
+    single_line = " ".join(message.split())
+    if len(single_line) > _MAX_MESSAGE_LEN:
+        single_line = single_line[: _MAX_MESSAGE_LEN - 1] + "…"
+    return single_line
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     """Write ``content`` to ``path`` without ever leaving a truncated file.
 
@@ -105,10 +128,65 @@ def _atomic_write_text(path: Path, content: str) -> None:
 class _LedgerRow:
     nodeid: str
     first_seen: str
+    last_seen: str
+    fail_rate: str
     pass_count: int
     fail_count: int
     suspected_cause: str
     status: str
+    sample_failure_message: str
+
+
+def _parse_row_cells(cells: list[str]) -> _LedgerRow | None:
+    """Parse one already-split, already-unescaped table row into a _LedgerRow.
+
+    Accepts both the current 9-cell shape and the legacy 6-cell shape
+    (pre-dating Fail Rate/Last Seen/Sample Failure) so ledgers written by
+    an older version of this module keep parsing -- never silently
+    dropped. Anything else (malformed cell count) is rejected by
+    returning None; the caller skips that row rather than crashing.
+    """
+    if len(cells) == 9:
+        (
+            nodeid,
+            first_seen,
+            last_seen,
+            fail_rate,
+            pass_count,
+            fail_count,
+            suspected_cause,
+            status,
+            sample_failure_message,
+        ) = cells
+        return _LedgerRow(
+            nodeid=nodeid,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            fail_rate=fail_rate,
+            pass_count=_safe_int(pass_count),
+            fail_count=_safe_int(fail_count),
+            suspected_cause=suspected_cause,
+            status=status,
+            sample_failure_message=sample_failure_message,
+        )
+    if len(cells) == 6:
+        nodeid, first_seen, pass_count_cell, fail_count_cell, suspected_cause, status = cells
+        pass_count_int = _safe_int(pass_count_cell)
+        fail_count_int = _safe_int(fail_count_cell)
+        total = pass_count_int + fail_count_int
+        fail_rate_value = (fail_count_int / total) if total > 0 else 0.0
+        return _LedgerRow(
+            nodeid=nodeid,
+            first_seen=first_seen,
+            last_seen=first_seen,
+            fail_rate=f"{fail_rate_value:.1%}",
+            pass_count=pass_count_int,
+            fail_count=fail_count_int,
+            suspected_cause=suspected_cause,
+            status=status,
+            sample_failure_message="-",
+        )
+    return None
 
 
 def _parse_ledger(known_flakes_path: Path) -> dict[str, _LedgerRow]:
@@ -121,29 +199,25 @@ def _parse_ledger(known_flakes_path: Path) -> dict[str, _LedgerRow]:
         if not stripped.startswith("|") or not stripped.endswith("|"):
             continue
         cells = [_unescape_pipes(cell.strip()) for cell in _ROW_SPLIT_RE.split(stripped)[1:-1]]
-        if len(cells) != 6 or cells[0] in ("Test ID", "---"):
+        if cells and cells[0] in ("Test ID", "---"):
             continue
-        nodeid, first_seen, pass_count, fail_count, suspected_cause, status = cells
-        rows[nodeid] = _LedgerRow(
-            nodeid=nodeid,
-            first_seen=first_seen,
-            pass_count=_safe_int(pass_count),
-            fail_count=_safe_int(fail_count),
-            suspected_cause=suspected_cause,
-            status=status,
-        )
+        row = _parse_row_cells(cells)
+        if row is None:
+            continue
+        rows[row.nodeid] = row
     return rows
 
 
 def write_known_flakes(reports: list[FlakeReport], known_flakes_path: Path) -> None:
     """Merge newly detected flakes into the known_flakes.md ledger.
 
-    Existing rows are matched by nodeid and updated in place (counts
-    refreshed, ``first_seen``/``suspected_cause`` preserved); nodeids new
-    to this batch are appended with today's date and an "unknown" cause
+    Existing rows are matched by nodeid and updated in place (counts,
+    ``last_seen``, ``fail_rate``, and ``sample_failure_message`` refreshed;
+    ``first_seen``/``suspected_cause`` preserved); nodeids new to this
+    batch are appended with today's date and an "unknown" cause
     placeholder (no failure-classifier exists yet). Rows for nodeids
     absent from this batch -- tests no longer observed as flaky -- are
-    never dropped, so history is never lost.
+    never dropped or otherwise touched, so history is never lost.
     """
     rows = _parse_ledger(known_flakes_path)
     today = date.today().isoformat()
@@ -153,17 +227,21 @@ def write_known_flakes(reports: list[FlakeReport], known_flakes_path: Path) -> N
         rows[report.nodeid] = _LedgerRow(
             nodeid=report.nodeid,
             first_seen=existing.first_seen if existing else today,
+            last_seen=today,
+            fail_rate=f"{report.fail_rate:.1%}",
             pass_count=report.pass_count,
             fail_count=report.fail_count + report.error_count,
             suspected_cause=existing.suspected_cause if existing else "unknown",
             status="flaky",
+            sample_failure_message=_sanitize_message(report.sample_failure_message),
         )
 
     lines = [_LEDGER_TITLE, "", _TABLE_HEADER, _TABLE_DIVIDER]
     for row in sorted(rows.values(), key=lambda row: row.nodeid):
         lines.append(
-            f"| {_escape_pipes(row.nodeid)} | {row.first_seen} | {row.pass_count} | "
-            f"{row.fail_count} | {row.suspected_cause} | {row.status} |"
+            f"| {_escape_pipes(row.nodeid)} | {row.first_seen} | {row.last_seen} | "
+            f"{row.fail_rate} | {row.pass_count} | {row.fail_count} | "
+            f"{row.suspected_cause} | {row.status} | {_escape_pipes(row.sample_failure_message)} |"
         )
 
     _atomic_write_text(known_flakes_path, "\n".join(lines) + "\n")
