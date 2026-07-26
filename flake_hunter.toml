@@ -13,7 +13,10 @@ output_dir = ".flake_hunter/raw_runs"
 [thresholds]
 # A test is flaky if its fail-rate falls strictly between these bounds.
 # 0.0 and 1.0 are not flaky -- they're consistently passing/failing.
-min_fail_rate = 0.0
+# min_fail_rate = 0.05 excludes a single 1-in-20 fluke (at the default
+# `runs = 20`) from counting as flaky -- strictly-between-bounds alone
+# can't do that, since 0.05 > 0.0.
+min_fail_rate = 0.05
 max_fail_rate = 1.0
 
 [quarantine]

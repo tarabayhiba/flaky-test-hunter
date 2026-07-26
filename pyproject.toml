@@ -38,7 +38,7 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "N", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["flake_hunter"]
+files = ["flake_hunter", "tests/unit"]
 
 [[tool.mypy.overrides]]
 module = ["pytest_jsonreport.*"]
